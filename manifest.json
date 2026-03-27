@@ -1,0 +1,18 @@
+{
+  "name": "Gastos Martín",
+  "short_name": "Gastos",
+  "description": "Tracker de gastos personal",
+  "start_url": "/gastos-tracker/",
+  "display": "standalone",
+  "background_color": "#F5F3EE",
+  "theme_color": "#2D5A3D",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
