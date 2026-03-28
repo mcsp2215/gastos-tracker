@@ -654,7 +654,8 @@ Reglas: amount positivo para gastos, negativo para pagos. type=cuota si tiene nÃ
     })
   });
   const data = await resp.json();
-  const text = data.content.map(b => b.text || '').join('').replace(/```json|```/g,'').trim();
+  if (!data.content) throw new Error(JSON.stringify(data));
+const text = data.content.map(b => b.text || '').join('').replace(/```json|```/g,'').trim();
   const match = text.match(/\{[\s\S]*\}/);
 if (!match) throw new Error('No JSON encontrado en respuesta');
 return JSON.parse(match[0]);
