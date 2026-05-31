@@ -592,6 +592,23 @@
     margin-bottom: 16px;
   }
 
+  /* Compromisos futuros */
+  .futuro-card {
+    background: var(--surface);
+    border: 0.5px solid var(--border);
+    border-radius: 10px;
+    padding: 12px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .futuro-card:hover { border-color: var(--red); }
+  .futuro-card.active { border-color: var(--red); background: var(--red-light); }
+  .futuro-card .f-mes { font-size:11px; font-family:var(--mono); color:var(--text3); text-transform:uppercase; margin-bottom:5px; }
+  .futuro-card .f-amt { font-family:var(--mono); font-size:16px; font-weight:500; color:var(--red); }
+  .futuro-card .f-count { font-size:11px; color:var(--text3); margin-top:3px; }
+  .futuro-card .f-bar { height:3px; background:var(--border); border-radius:2px; margin-top:7px; overflow:hidden; }
+  .futuro-card .f-bar-fill { height:100%; background:var(--red); border-radius:2px; }
+
   /* Password modal */
   .pwd-overlay {
     display: none;
@@ -768,6 +785,29 @@
           </tr>
         </thead>
         <tbody id="txnBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Compromisos futuros -->
+  <div id="futurosSection" style="display:none">
+    <div class="section-title">Compromisos futuros en cuotas</div>
+    <div id="futurosGrid" style="display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin-bottom:1.5rem"></div>
+    <div class="txn-panel" id="futurosDetalle" style="display:none;margin-bottom:2rem">
+      <div class="txn-header">
+        <h3 id="futurosDetalleTitle">Cuotas del mes</h3>
+        <button class="filter-btn" onclick="closeFuturosDetalle()">✕ Cerrar</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Descripción</th>
+            <th>Cuota</th>
+            <th>Fuente</th>
+            <th style="text-align:right">Cuota mensual</th>
+          </tr>
+        </thead>
+        <tbody id="futurosDetalleBody"></tbody>
       </table>
     </div>
   </div>
@@ -1049,20 +1089,29 @@ Formato exacto:
       "description": "nombre legible del comercio o concepto",
       "raw": "texto original del PDF",
       "amount": 12345,
+      "cuota_mensual": 12345,
+      "monto_total": 12345,
       "type": "consumo" | "cuota" | "pago" | "cargo",
-      "cuota_info": "3/12" | null
+      "cuota_info": "6/12" | null
     }
   ]
 }
-Reglas:
-- amount es siempre positivo para gastos, negativo para pagos/abonos
-- type="cuota" si tiene número de cuota (ej: 3/12)
-- type="consumo" si es una compra en 1 cuota
-- type="pago" si es un pago o abono
+Reglas CRÍTICAS para transacciones en cuotas:
+- cuota_info: número de cuota ACTUAL y total, ej "6/12" significa cuota 6 de 12
+- cuota_mensual: el VALOR CUOTA MENSUAL (última columna del PDF, el monto que se paga este mes)
+- monto_total: el monto total original de la compra
+- amount: igual a cuota_mensual para cuotas (NO el monto total)
+- Ejemplo: IKEA cuota 9/12, valor cuota $53.833, monto original $547.950 → amount=53833, cuota_mensual=53833, monto_total=547950, cuota_info="9/12"
+Otras reglas:
+- Para consumos en 1 cuota: amount = monto total, cuota_info = null
+- type="cuota" si tiene número de cuota mayor a 1
+- type="consumo" si es compra en 1 cuota (01/01)
+- type="pago" si es pago o abono (monto negativo)
 - type="cargo" si es comisión, impuesto, mantenimiento
-- Incluye TODAS las transacciones incluyendo pagos y cargos
 - description debe ser el nombre legible (ej: "HBO Max" no "HELP.HBOMAX.COM H")
-- NO incluyas la transacción de período anterior, solo el período actual`;
+- Incluye TODAS las transacciones incluyendo pagos y cargos
+- NO incluyas transacciones del período anterior, solo el período actual
+- Para tarjeta internacional (USD): convierte el monto a pesos chilenos usando el monto en pesos que aparece en el PDF`;
 
   let contentBlocks;
   if (payload.type === 'pdf') {
@@ -1144,6 +1193,8 @@ async function handleFiles(files) {
             description: txn.description,
             raw: txn.raw,
             amount: txn.amount,
+            cuota_mensual: txn.cuota_mensual || txn.amount,
+            monto_total: txn.monto_total || txn.amount,
             type: txn.type,
             cuota_info: txn.cuota_info || null,
             source: parsed.source,
@@ -1247,6 +1298,106 @@ function render() {
 
   // Transactions
   renderTxns(txns);
+  renderFuturos();
+}
+
+// ── Compromisos Futuros ───────────────────────────────────────────────
+const MESES = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+
+function parsePeriodToDate(label) {
+  const [m, y] = label.split(' ');
+  const mi = MESES.indexOf(m.toLowerCase());
+  return new Date(parseInt(y), mi < 0 ? 0 : mi, 1);
+}
+
+function computeFutureCommitments() {
+  const byMonth = {};
+  for (const month of Object.values(allData.months)) {
+    for (const t of month.transactions) {
+      if (t.type !== 'cuota' || !t.cuota_info) continue;
+      const match = t.cuota_info.match(/(\d+)\/(\d+)/);
+      if (!match) continue;
+      const cur = parseInt(match[1]);
+      const tot = parseInt(match[2]);
+      const remaining = tot - cur;
+      if (remaining <= 0) continue;
+
+      const parts = t.date.split('/');
+      if (parts.length < 3) continue;
+      let mo = parseInt(parts[1]);
+      let yr = parseInt(parts[2]) + 2000;
+
+      for (let i = 1; i <= remaining; i++) {
+        mo++;
+        if (mo > 12) { mo = 1; yr++; }
+        const label = MESES[mo-1].charAt(0).toUpperCase() + MESES[mo-1].slice(1) + ' ' + yr;
+        if (!byMonth[label]) byMonth[label] = [];
+        byMonth[label].push({ ...t, futuraCuota: `${cur+i}/${tot}` });
+      }
+    }
+  }
+  return byMonth;
+}
+
+let futurosSelected = null;
+
+function renderFuturos() {
+  const byMonth = computeFutureCommitments();
+  const keys = Object.keys(byMonth).sort((a,b) => parsePeriodToDate(a) - parsePeriodToDate(b));
+  const section = document.getElementById('futurosSection');
+  const grid = document.getElementById('futurosGrid');
+  if (keys.length === 0) { section.style.display = 'none'; return; }
+  section.style.display = 'block';
+
+  const maxAmt = Math.max(...keys.map(k => byMonth[k].reduce((s,t) => s + (t.cuota_mensual||t.amount), 0)));
+  grid.innerHTML = '';
+  keys.forEach(key => {
+    const txns = byMonth[key];
+    const total = txns.reduce((s,t) => s + (t.cuota_mensual||t.amount), 0);
+    const pct = maxAmt > 0 ? total/maxAmt*100 : 0;
+    const card = document.createElement('div');
+    card.className = 'futuro-card' + (futurosSelected === key ? ' active' : '');
+    card.innerHTML = `
+      <div class="f-mes">${key}</div>
+      <div class="f-amt">${fmtPeso(total)}</div>
+      <div class="f-bar"><div class="f-bar-fill" style="width:${Math.round(pct)}%"></div></div>
+      <div class="f-count">${txns.length} cuota${txns.length!==1?'s':''}</div>
+    `;
+    card.onclick = () => {
+      futurosSelected = futurosSelected === key ? null : key;
+      renderFuturos();
+      if (futurosSelected) showFuturosDetalle(key, byMonth[key]);
+      else closeFuturosDetalle();
+    };
+    grid.appendChild(card);
+  });
+}
+
+function showFuturosDetalle(mes, txns) {
+  const panel = document.getElementById('futurosDetalle');
+  const body = document.getElementById('futurosDetalleBody');
+  document.getElementById('futurosDetalleTitle').textContent = `Cuotas comprometidas — ${mes}`;
+  panel.style.display = 'block';
+  body.innerHTML = '';
+  [...txns].sort((a,b) => (b.cuota_mensual||b.amount)-(a.cuota_mensual||a.amount)).forEach(t => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>
+        <div class="txn-desc">${t.description}</div>
+        <div class="txn-raw">${fmtPeso(t.monto_total||t.amount)} total</div>
+      </td>
+      <td><span class="source-badge">${t.futuraCuota}</span></td>
+      <td><span class="source-badge">${t.source?.replace(' BChile','')||'—'}</span></td>
+      <td class="txn-amount negative">${fmtPeso(t.cuota_mensual||t.amount)}</td>
+    `;
+    body.appendChild(tr);
+  });
+}
+
+function closeFuturosDetalle() {
+  futurosSelected = null;
+  document.getElementById('futurosDetalle').style.display = 'none';
+  renderFuturos();
 }
 
 function renderTxns(txns) {
@@ -1279,11 +1430,35 @@ function renderTxns(txns) {
   filtered.forEach(txn => {
     const cat = getCat(txn.category);
     const tr = document.createElement('tr');
+
+    // Cuota progress
+    let cuotaHtml = '';
+    if (txn.cuota_info) {
+      const match = txn.cuota_info.match(/(\d+)\/(\d+)/);
+      if (match) {
+        const cur = parseInt(match[1]);
+        const tot = parseInt(match[2]);
+        const pct = cur / tot * 100;
+        const remaining = tot - cur;
+        cuotaHtml = `
+          <div style="margin-top:4px">
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
+              <span class="cuota-flag">cuota ${cur}/${tot} · ${remaining} restante${remaining !== 1 ? 's' : ''}</span>
+              <span style="font-size:10px;color:var(--text3);font-family:var(--mono)">${fmtPeso(txn.monto_total || txn.amount)} total</span>
+            </div>
+            <div style="height:3px;background:var(--border);border-radius:2px;width:120px;overflow:hidden">
+              <div style="height:100%;width:${Math.round(pct)}%;background:var(--amber);border-radius:2px"></div>
+            </div>
+          </div>`;
+      }
+    }
+
     tr.innerHTML = `
       <td class="txn-date">${txn.date}</td>
       <td>
         <div class="txn-desc">${txn.description}</div>
-        <div class="txn-raw">${txn.raw || ''} ${txn.cuota_info ? `<span class="cuota-flag">cuota ${txn.cuota_info}</span>` : ''}</div>
+        <div class="txn-raw">${txn.raw || ''}</div>
+        ${cuotaHtml}
       </td>
       <td><span class="source-badge">${txn.source?.replace(' BChile','') || '—'}</span></td>
       <td>
@@ -1292,7 +1467,10 @@ function renderTxns(txns) {
           ${cat.icon} ${cat.label}${txn.manualCat ? ' ✓' : ''}
         </button>
       </td>
-      <td class="txn-amount negative">${fmtPeso(txn.amount)}</td>
+      <td class="txn-amount negative" style="vertical-align:top">
+        ${fmtPeso(txn.cuota_mensual || txn.amount)}
+        ${txn.cuota_info ? `<div style="font-size:10px;color:var(--text3);font-weight:400">c/mes</div>` : ''}
+      </td>
     `;
     tbody.appendChild(tr);
   });
