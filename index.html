@@ -744,9 +744,13 @@
       <div class="sub">arrastre de meses anteriores</div>
     </div>
     <div class="summary-card">
-      <div class="label">Transacciones</div>
-      <div class="amount" id="sumCount">0</div>
-      <div class="sub" id="sumSources">—</div>
+      <div class="label">% del sueldo</div>
+      <div class="amount" id="sumPct" style="font-size:20px">—</div>
+      <div class="sub" id="sumPctBar" style="margin-top:6px">
+        <div style="height:4px;background:var(--border);border-radius:2px;overflow:hidden">
+          <div id="sumPctFill" style="height:100%;width:0%;border-radius:2px;transition:width 0.3s"></div>
+        </div>
+      </div>
     </div>
     <div class="summary-card">
       <div class="label">Categoría mayor</div>
@@ -861,7 +865,24 @@
     <div class="cat-options" id="catOptions"></div>
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-ghost" onclick="openNewCatModal()" style="color:var(--accent)">+ Nueva</button>
       <button class="btn btn-primary" onclick="saveCategory()">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<!-- New category modal -->
+<div class="apikey-overlay" id="newCatOverlay">
+  <div class="apikey-modal">
+    <h3>Nueva categoría</h3>
+    <p>Se guardará en tu navegador y estará disponible siempre.</p>
+    <div style="display:flex;gap:8px;margin-bottom:10px">
+      <input type="text" class="apikey-input" id="newCatIcon" placeholder="📌" style="width:60px;text-align:center;font-size:20px;padding:8px">
+      <input type="text" class="apikey-input" id="newCatName" placeholder="Nombre de la categoría" style="flex:1">
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeNewCatModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="saveNewCat()">Crear</button>
     </div>
   </div>
 </div>
@@ -882,30 +903,46 @@ const CATEGORIES = [
   { id: 'tramites',      label: 'Documentación / Trámites', icon: '📋', color: '#2D4A6A', bg: '#E8EEF5' },
   { id: 'trabajo',       label: 'Trabajo / Empresa',        icon: '💼', color: '#4A4A2D', bg: '#F5F5E0' },
   { id: 'gastos-maria',  label: 'Gastos María',             icon: '👩', color: '#8E2D6A', bg: '#F8E8F2' },
+  { id: 'ingreso',       label: 'Ingreso / Sueldo',         icon: '💰', color: '#1A6A2A', bg: '#E0F5E8' },
+  { id: 'pago-tc',       label: 'Pago Tarjeta',             icon: '💳', color: '#2A2A6A', bg: '#E8E8F5' },
+  { id: 'credito',       label: 'Crédito BancoEstado',      icon: '🏛️', color: '#4A2A1A', bg: '#F5EEE8' },
+  { id: 'transferencia', label: 'Transferencias',           icon: '↔️', color: '#3A5A3A', bg: '#E8F0E8' },
+  { id: 'reembolso',     label: 'Reembolsos',               icon: '↩️', color: '#1A4A4A', bg: '#E0F0F0' },
   { id: 'otros',         label: 'Otros',                    icon: '📦', color: '#6B6560', bg: '#F0EDE6' },
 ];
 
+// Load custom categories from localStorage and merge
+function loadCustomCategories() {
+  const custom = JSON.parse(localStorage.getItem('gastos_custom_cats') || '[]');
+  custom.forEach(c => {
+    if (!CATEGORIES.find(x => x.id === c.id)) CATEGORIES.splice(CATEGORIES.length - 1, 0, c);
+  });
+}
+loadCustomCategories();
+
 const CAT_MAP = {
   // Alimentación
-  'HIPER 978': 'alimentacion', 'MURKEN': 'alimentacion',
+  'HIPER 978': 'alimentacion', 'MURKEN': 'alimentacion', 'PASTELERIA MURKEN': 'alimentacion',
   'TUU*DE LOS BUENOS': 'alimentacion', 'MERCADOPAGO*CANTABRI': 'alimentacion',
   'JUMBO': 'alimentacion', 'SANTA ISABEL': 'alimentacion', 'UNIMARC': 'alimentacion',
-  'LA TRILLA': 'alimentacion', 'RANCHO CAROLINA': 'alimentacion',
+  'LA TRILLA': 'alimentacion', 'RANCHO CAROLINA': 'alimentacion', 'MARANATHA': 'alimentacion',
   // Salidas
   'LA POYOLLA': 'salidas', 'BEER GARDEN': 'salidas', 'RESTAURANTE': 'salidas',
   'CAFE': 'salidas', 'FUSION': 'salidas', 'PAPAJOHN': 'salidas',
   'MF PAPAJOHN': 'salidas', 'TU ITALIANA': 'salidas', 'LA MASCA': 'salidas',
-  'BOCAGRANDE': 'salidas', 'CASABLANCA': 'salidas',
-  'EL JARDIN DE LOS': 'salidas', 'GRANJA AROMA': 'salidas',
-  'MEGAVISION': 'salidas', 'MEGRA Y': 'salidas',
+  'BOCAGRANDE': 'salidas', 'CASABLANCA': 'salidas', 'HELADERIA': 'salidas',
+  'EL JARDIN DE LOS': 'salidas', 'GRANJA AROMA': 'salidas', 'SUMUP * LA COMPANIA': 'salidas',
+  'MEGAVISION': 'salidas', 'MEGRA Y': 'salidas', 'SUMUP * DE LAS HIERBA': 'alimentacion',
   // Transporte
   'APP ARAMCO': 'transporte', 'COPEC': 'transporte', 'AUTOPISTA': 'transporte',
   'JIS PARKING': 'transporte', 'SABA AEROPUERTO': 'transporte',
   'MERPAGO*CABIFY': 'transporte', 'CABIFY': 'transporte',
   'REVISION TECNICA': 'transporte',
   'MERCADOPAGO/ESTACIO': 'transporte', 'MERCADOPAGO*ESTACIO': 'transporte',
+  'MERCADOPAGO *ESTACION': 'transporte',
   'MERCADOPAGO/EASYTSP': 'transporte', 'PARKING': 'transporte',
   'VOLKSWAGEN': 'transporte', 'VOLKSWAGEN ZENTRUM': 'transporte',
+  'GIRO CAJERO': 'transporte',
   // Seguros
   'COMPARA SEG AUTO': 'seguros', 'COMPRA SEG AUTO': 'seguros',
   'BANCHILE SEGUROS': 'seguros',
@@ -914,7 +951,8 @@ const CAT_MAP = {
   'MUNICIPALIDAD': 'hogar', 'AGUAS OLMUE': 'hogar',
   'C. VERDE AV URMENET': 'hogar',
   'MERCADOPAGO*PAOLAVA': 'hogar', 'MERCADOPAGO*HIDROSY': 'hogar',
-  'SII': 'hogar', 'SAN FRANCISCO DE LI': 'hogar', 'ESVAL': 'hogar',
+  'SAN FRANCISCO DE LI': 'hogar', 'ESVAL': 'hogar',
+  'ESPACIO NODO NORTE': 'trabajo',
   // Salud
   'C VERDE AV URRMENETA': 'salud', 'C. VERDE VW': 'salud', 'VERDE VW': 'salud',
   'PAT CAS': 'salud', 'ICA SANTIAGO': 'salud', 'CON UN ICA': 'salud',
@@ -923,23 +961,50 @@ const CAT_MAP = {
   // Suscripciones
   'STARLINK': 'suscripciones', 'DL*STARLINK': 'suscripciones',
   'HELP.HBOMAX': 'suscripciones', 'GOOGLE PLAY YOUTUBE': 'suscripciones',
+  'DL*GOOGLE YOUTUBE': 'suscripciones',
   'OPENAI': 'suscripciones', 'SPOTIFY': 'suscripciones',
   'HOTMART': 'suscripciones', 'NETFLIX': 'suscripciones', 'DISNEY': 'suscripciones',
+  'CLAUDE.AI': 'suscripciones', 'MANYCHAT': 'suscripciones',
   // Mascotas
-  'GRANJA AROMATICA': 'mascotas',
+  'GRANJA AROMATICA': 'mascotas', 'EMILY PET': 'mascotas',
   // Trámites
-  'REGISTRO CIVIL': 'tramites',
+  'REGISTRO CIVIL': 'tramites', 'PAGO EN SII': 'tramites', 'SII.CL': 'tramites',
   // Trabajo
-  'UNEO': 'trabajo', 'ESPACIO NOVO': 'trabajo',
+  'UNEO': 'trabajo', 'ESPACIO NOVO': 'trabajo', 'MP *APPSHELL': 'trabajo',
   // Compras
   'IKEA': 'compras', 'DECATHLON': 'compras',
   'TRAVEL TIENDA': 'compras', 'TRAVEL DUTY': 'compras',
   'MUNDO DE LAMUSICA': 'compras', 'MUNDO DE LA MUSICA': 'compras',
-  'N BISONO': 'compras',
+  'N BISONO': 'compras', 'COMERCIAL XINYI': 'compras', 'QUINOA': 'compras',
+  'MACONLINE': 'gastos-maria',
   // Cuotas banco
   'COMISION': 'cuotas-banco', 'IMPUESTO DECRETO': 'cuotas-banco',
   'AVANCE EN CUOTAS': 'cuotas-banco', 'AVANCE PAGO TC': 'cuotas-banco',
   'CRED. PAGO EN CUOTA': 'cuotas-banco',
+  'COMISION ADMIN': 'cuotas-banco',
+  // Cuenta corriente — ingresos
+  'ASESORIAS E INVERSIONE': 'ingreso', 'TRASPASO DE:ASESORIAS': 'ingreso',
+  'SCHUSTER PINEDA MARTIN': 'reembolso',
+  // Cuenta corriente — pagos TC
+  'CARGO POR PAGO TC': 'pago-tc', 'PAGO TARJETA DE CREDITO': 'pago-tc',
+  // Cuenta corriente — crédito BancoEstado
+  'PAGO DE CREDITOS M/N': 'credito', 'TRASPASO A:MARTIN CLEMENTE': 'credito',
+  'TRASPASO A:Martin Clemente Schust': 'credito',
+  // Cuenta corriente — transferencias familiares
+  'TRASPASO A:CECILIA': 'transferencia', 'TRASPASO A:Cecilia': 'transferencia',
+  'TRASPASO A:Barbara': 'transferencia', 'TRASPASO A:maria paz': 'transferencia',
+  'TRASPASO A:Schuster Vergara': 'transferencia', 'TRASPASO A:Heidi': 'transferencia',
+  'TRASPASO A:Antonia': 'transferencia', 'TRASPASO A:Harold': 'transferencia',
+  'TRASPASO A:Nelson': 'transferencia', 'TRASPASO A:Anita': 'transferencia',
+  'TRASPASO A:Ricardo': 'transferencia', 'TRASPASO A:Cuper': 'transferencia',
+  'TRASPASO A:Kupo': 'transferencia', 'TRASPASO A:Patricio': 'transferencia',
+  'TRASPASO A:Cristian': 'transferencia',
+  // Cuenta corriente — reembolsos
+  'TRASPASO DE:MARIA JOSE': 'reembolso', 'TRASPASO DE:Maria Jose': 'reembolso',
+  'TRASPASO DE:Gianella': 'reembolso',
+  // Cuenta corriente — servicios
+  'Pago Servicio en Mi Banco': 'hogar', 'COMUNIDAD VALLE NATIVO': 'hogar',
+  'TRASPASO A:Comunidad Valle Nativo': 'hogar',
   // Otros
   'MERCADOPAGO*DESARRO': 'otros', 'MERCADOPAGO*BASTYSP': 'otros',
   'MERCADOPAGO/PAGON': 'otros', 'MERCADOPAGO/AUTUNUB': 'otros',
@@ -947,11 +1012,27 @@ const CAT_MAP = {
 };
 
 function guessCategory(desc) {
+  if (!desc) return 'otros';
   const upper = desc.toUpperCase();
+  // Check learned rules first
+  const learned = JSON.parse(localStorage.getItem('gastos_learned_cats') || '{}');
+  for (const [key, cat] of Object.entries(learned)) {
+    if (upper.includes(key.toUpperCase())) return cat;
+  }
+  // Then check built-in map
   for (const [key, cat] of Object.entries(CAT_MAP)) {
     if (upper.includes(key.toUpperCase())) return cat;
   }
   return 'otros';
+}
+
+function learnCategory(rawDesc, catId) {
+  if (!rawDesc) return;
+  const learned = JSON.parse(localStorage.getItem('gastos_learned_cats') || '{}');
+  // Extract key word from description (first meaningful word)
+  const key = rawDesc.trim().toUpperCase().split(/\s+/).slice(0,3).join(' ');
+  learned[key] = catId;
+  localStorage.setItem('gastos_learned_cats', JSON.stringify(learned));
 }
 
 function getCat(id) {
@@ -1126,20 +1207,52 @@ async function parsePDFWithClaude(file) {
   const arrayBuffer = await file.arrayBuffer();
   const payload = await unlockPDF(arrayBuffer, file.name);
 
-  const promptText = `Eres un extractor de datos financieros para estados de cuenta del Banco de Chile. Analiza TODAS las páginas del documento y devuelve SOLO un JSON válido, sin markdown, sin backticks, sin explicación.
+  const isCuentaCorriente = file.name.toLowerCase().includes('cartola') || file.name.toLowerCase().includes('corriente');
 
-ESTRUCTURA DEL PDF QUE DEBES LEER:
-- Sección 2 "Período Actual": transacciones del mes (consumos, pagos, cuotas vigentes)
-- Sección 4 "Información Compras en Cuotas en Período": compras NUEVAS con cuota 00/XX (aún no cobradas)
-- Sección 3 "Información de Pago": tabla "Vencimiento Próximos 4 Meses" con montos futuros
-- Tarjeta internacional (USD): convertir usando el monto en pesos del PDF nacional
+  const promptCC = `Eres un extractor de datos para cartolas de cuenta corriente del Banco de Chile. Devuelve SOLO JSON válido, sin markdown ni backticks.
 
-FORMATO JSON EXACTO:
+FORMATO:
 {
-  "source": "Mastercard BChile" | "Visa BChile" | "Cuenta Corriente",
+  "source": "Cuenta Corriente BChile",
+  "period": "Abr 2026",
+  "saldo_inicial": 3694163,
+  "saldo_final": 3527940,
+  "transactions": [
+    {
+      "date": "DD/MM/YY",
+      "description": "descripción legible",
+      "raw": "texto original",
+      "amount": 12345,
+      "type": "cargo" | "abono",
+      "cuota_info": null,
+      "cuota_mensual": null,
+      "monto_total": null,
+      "card_digits": null
+    }
+  ]
+}
+
+REGLAS:
+- period: usa el mes del campo HASTA del encabezado
+- type="abono" para depósitos/ingresos/traspasos recibidos
+- type="cargo" para cargos/traspasos enviados/pagos
+- amount: siempre positivo
+- Incluye TODAS las transacciones incluyendo pagos de tarjeta, traspasos, comisiones
+- description legible: "Sueldo Asesorías" no "TRASPASO DE:ASESORIAS E INVERSIONE", "Pago Tarjeta" no "CARGO POR PAGO TC"
+- Para traspasos: "Traspaso a [nombre]" o "Traspaso de [nombre]"`;
+
+  const promptTC = `Eres un extractor de datos para estados de cuenta de tarjetas del Banco de Chile. Devuelve SOLO JSON válido, sin markdown ni backticks.
+
+ESTRUCTURA A LEER:
+- Sección 2 "Período Actual": consumos (01/01), cuotas vigentes (NN/TT), pagos
+- Sección 4 "Información Compras en Cuotas en Período": compras nuevas (00/TT)
+- Sección 3 "Información de Pago": tabla "Vencimiento Próximos 4 Meses"
+- Tarjeta internacional: usa el monto en pesos del PDF nacional
+
+FORMATO:
+{
+  "source": "Mastercard BChile" | "Visa BChile",
   "period": "May 2026",
-  "card_0836": "Martín",
-  "card_6758": "María",
   "vencimientos": {
     "actual": 1109351,
     "mes1": { "label": "Jun 2026", "amount": 676713 },
@@ -1151,7 +1264,7 @@ FORMATO JSON EXACTO:
     {
       "date": "DD/MM/YY",
       "description": "nombre legible",
-      "raw": "texto original del PDF",
+      "raw": "texto original",
       "amount": 12345,
       "cuota_mensual": 12345,
       "monto_total": 12345,
@@ -1162,36 +1275,17 @@ FORMATO JSON EXACTO:
   ]
 }
 
-REGLAS CRÍTICAS PARA CUOTAS:
-- Sección 2, cuotas vigentes: formato NN/TT donde NN = cuota actual, TT = total
-  → Ejemplo: "19/24" = cuota 19 de 24, cuota_info="19/24", cuotas restantes = 24-19 = 5
-  → amount = cuota_mensual = VALOR CUOTA MENSUAL (última columna)
-  → monto_total = monto original de la compra (primera columna de montos)
-  → type = "cuota"
-  → LATAM 01/03 $201.073: cuota_info="1/3", cuota_mensual=201073, restantes=2 ← LEER BIEN
-  → MACONLINE 01/24 $91.666: cuota_info="1/24", cuota_mensual=91666, restantes=23
+CUOTAS - REGLAS CRÍTICAS:
+- Sección 2 cuotas: NN/TT = cuota actual/total. amount = cuota_mensual = VALOR CUOTA MENSUAL (última columna). monto_total = primera columna. type="cuota"
+- LATAM 01/03 $201.073 → cuota_info="1/3", cuota_mensual=201073 (tiene 2 restantes)
+- MACONLINE 01/24 $91.666 → cuota_info="1/24", cuota_mensual=91666 (tiene 23 restantes)
+- Sección 4 compras nuevas: 00/TT → type="cuota_nueva", cuota_info="0/24", amount=cuota_mensual=última columna
+- card_digits: según sección "TOTAL TARJETA XXXX XXXX XXXX NNNN"
+- type="consumo" si 01/01, type="pago" si negativo, type="cargo" si comisión/impuesto
+- description legible: "Starlink" no "DL*STARLINK", "YouTube" no "GOOGLE PLAY YOUTUBE"
+- NO incluyas período anterior`;
 
-- Sección 4, compras nuevas en cuotas: formato 00/TT (cuota cero = aún no cobrada)
-  → type = "cuota_nueva" (empieza a cobrar el próximo mes)
-  → cuota_info = "0/24" por ejemplo
-  → amount = cuota_mensual = VALOR CUOTA MENSUAL (última columna)
-  → monto_total = monto original
-
-REGLAS PARA card_digits:
-- Asigna según el subtotal de tarjeta donde aparece la transacción
-- "TOTAL TARJETA XXXX XXXX XXXX 6758" → card_digits="6758"
-- "TOTAL TARJETA XXXX XXXX XXXX 0836" → card_digits="0836"
-- Si no se puede determinar: null
-
-OTRAS REGLAS:
-- type="consumo" si es compra en 1 cuota (01/01)
-- type="pago" si es pago o abono (monto negativo)
-- type="cargo" si es comisión, impuesto, mantenimiento, seguros
-- description legible: "Ikea" no "DP *IKEA COM", "Starlink" no "DL*STARLINK", "YouTube" no "GOOGLE PLAY YOUTUBE"
-- Incluye TODAS las transacciones de TODAS las secciones
-- NO incluyas transacciones del período anterior
-- Para tarjeta internacional USD: usa el monto en pesos que aparece en el estado nacional
-- vencimientos: extrae la tabla "Vencimiento Próximos 4 Meses" exactamente como aparece`;
+  const promptText = isCuentaCorriente ? promptCC : promptTC;
 
   let contentBlocks;
   if (payload.type === 'pdf') {
@@ -1229,6 +1323,7 @@ OTRAS REGLAS:
   return JSON.parse(match[0]);
 }
 
+
 // Upload handling
 const uploadZone = document.getElementById('uploadZone');
 const fileInput = document.getElementById('fileInput');
@@ -1260,11 +1355,19 @@ async function handleFiles(files) {
       log.textContent = `Categorizando ${parsed.transactions.length} movimientos...`;
 
       const monthKey = normalizePeriod(parsed.period);
-      if (!allData.months[monthKey]) allData.months[monthKey] = { transactions: [], vencimientos: null };
+      if (!allData.months[monthKey]) allData.months[monthKey] = { transactions: [], vencimientos: null, saldo: null };
 
       // Store bank vencimientos if available
       if (parsed.vencimientos) {
         allData.months[monthKey].vencimientos = parsed.vencimientos;
+      }
+
+      // Store saldo for cuenta corriente
+      if (parsed.saldo_inicial !== undefined || parsed.saldo_final !== undefined) {
+        allData.months[monthKey].saldo = {
+          inicial: parsed.saldo_inicial || 0,
+          final: parsed.saldo_final || 0
+        };
       }
 
       const existingIds = new Set(allData.months[monthKey].transactions.map(t => t.id));
@@ -1351,14 +1454,20 @@ function render() {
   const totalConsumo = consumo.reduce((s, t) => s + t.amount, 0);
   const totalCuotas = cuotas.reduce((s, t) => s + t.amount, 0);
 
+  const SUELDO = 3330000;
+  const pctSueldo = Math.round(total / SUELDO * 100);
+  const semColor = pctSueldo < 40 ? '#2D5A3D' : pctSueldo < 70 ? '#B5621A' : '#C0392B';
+
   document.getElementById('sumTotal').textContent = fmtPeso(total);
   document.getElementById('sumPeriod').textContent = currentMonth;
   document.getElementById('sumConsumo').textContent = fmtPeso(totalConsumo);
   document.getElementById('sumCuotas').textContent = fmtPeso(totalCuotas);
-  document.getElementById('sumCount').textContent = gastos.length;
+  document.getElementById('sumPct').textContent = pctSueldo + '%';
+  document.getElementById('sumPct').style.color = semColor;
+  document.getElementById('sumPctFill').style.width = Math.min(pctSueldo, 100) + '%';
+  document.getElementById('sumPctFill').style.background = semColor;
 
   const sources = [...new Set(txns.map(t => t.source))];
-  document.getElementById('sumSources').textContent = sources.join(' + ');
 
   // Top cat
   const byCat = {};
@@ -1680,12 +1789,47 @@ function saveCategory() {
     if (txn) {
       txn.category = modalSelectedCat;
       txn.manualCat = true;
+      // Learn this rule for future transactions
+      learnCategory(txn.raw || txn.description, modalSelectedCat);
       break;
     }
   }
   saveData();
   closeModal();
   render();
+}
+
+// Custom categories
+function openNewCatModal() {
+  document.getElementById('newCatOverlay').classList.add('show');
+  document.getElementById('newCatName').value = '';
+  document.getElementById('newCatIcon').value = '📌';
+  setTimeout(() => document.getElementById('newCatName').focus(), 100);
+}
+
+function closeNewCatModal() {
+  document.getElementById('newCatOverlay').classList.remove('show');
+}
+
+function saveNewCat() {
+  const label = document.getElementById('newCatName').value.trim();
+  const icon = document.getElementById('newCatIcon').value.trim() || '📌';
+  if (!label) return;
+  const id = 'custom-' + label.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+  const newCat = { id, label, icon, color: '#4A4A4A', bg: '#F0F0EE', custom: true };
+  CATEGORIES.splice(CATEGORIES.length - 1, 0, newCat);
+  const stored = JSON.parse(localStorage.getItem('gastos_custom_cats') || '[]');
+  if (!stored.find(c => c.id === id)) { stored.push(newCat); localStorage.setItem('gastos_custom_cats', JSON.stringify(stored)); }
+  closeNewCatModal();
+  // Refresh modal options if open
+  if (editingTxnId) {
+    const opts = document.getElementById('catOptions');
+    const div = document.createElement('div');
+    div.className = 'cat-opt';
+    div.innerHTML = `<span>${icon}</span><span>${label}</span>`;
+    div.onclick = () => { modalSelectedCat = id; document.querySelectorAll('.cat-opt').forEach(d => d.classList.remove('selected')); div.classList.add('selected'); };
+    opts.appendChild(div);
+  }
 }
 
 document.getElementById('modalOverlay').addEventListener('click', e => {
