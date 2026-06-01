@@ -1126,41 +1126,72 @@ async function parsePDFWithClaude(file) {
   const arrayBuffer = await file.arrayBuffer();
   const payload = await unlockPDF(arrayBuffer, file.name);
 
-  const promptText = `Extrae TODAS las transacciones de este estado de cuenta bancario chileno.
-Devuelve SOLO un JSON válido, sin markdown, sin backticks, sin explicación.
-Formato exacto:
+  const promptText = `Eres un extractor de datos financieros para estados de cuenta del Banco de Chile. Analiza TODAS las páginas del documento y devuelve SOLO un JSON válido, sin markdown, sin backticks, sin explicación.
+
+ESTRUCTURA DEL PDF QUE DEBES LEER:
+- Sección 2 "Período Actual": transacciones del mes (consumos, pagos, cuotas vigentes)
+- Sección 4 "Información Compras en Cuotas en Período": compras NUEVAS con cuota 00/XX (aún no cobradas)
+- Sección 3 "Información de Pago": tabla "Vencimiento Próximos 4 Meses" con montos futuros
+- Tarjeta internacional (USD): convertir usando el monto en pesos del PDF nacional
+
+FORMATO JSON EXACTO:
 {
-  "source": "Visa BChile" | "Mastercard BChile" | "Cuenta Corriente" | "Débito",
-  "period": "MMM YYYY",
+  "source": "Mastercard BChile" | "Visa BChile" | "Cuenta Corriente",
+  "period": "May 2026",
+  "card_0836": "Martín",
+  "card_6758": "María",
+  "vencimientos": {
+    "actual": 1109351,
+    "mes1": { "label": "Jun 2026", "amount": 676713 },
+    "mes2": { "label": "Jul 2026", "amount": 599563 },
+    "mes3": { "label": "Ago 2026", "amount": 302418 },
+    "mes4": { "label": "Sep 2026", "amount": 250542 }
+  },
   "transactions": [
     {
       "date": "DD/MM/YY",
-      "description": "nombre legible del comercio o concepto",
+      "description": "nombre legible",
       "raw": "texto original del PDF",
       "amount": 12345,
       "cuota_mensual": 12345,
       "monto_total": 12345,
-      "type": "consumo" | "cuota" | "pago" | "cargo",
-      "cuota_info": "6/12" | null
+      "type": "consumo" | "cuota" | "cuota_nueva" | "pago" | "cargo",
+      "cuota_info": "6/12" | null,
+      "card_digits": "0836" | "6758" | null
     }
   ]
 }
-Reglas CRÍTICAS para transacciones en cuotas:
-- cuota_info: número de cuota ACTUAL y total, ej "6/12" significa cuota 6 de 12
-- cuota_mensual: el VALOR CUOTA MENSUAL (última columna del PDF, el monto que se paga este mes)
-- monto_total: el monto total original de la compra
-- amount: igual a cuota_mensual para cuotas (NO el monto total)
-- Ejemplo: IKEA cuota 9/12, valor cuota $53.833, monto original $547.950 → amount=53833, cuota_mensual=53833, monto_total=547950, cuota_info="9/12"
-Otras reglas:
-- Para consumos en 1 cuota: amount = monto total, cuota_info = null
-- type="cuota" si tiene número de cuota mayor a 1
+
+REGLAS CRÍTICAS PARA CUOTAS:
+- Sección 2, cuotas vigentes: formato NN/TT donde NN = cuota actual, TT = total
+  → Ejemplo: "19/24" = cuota 19 de 24, cuota_info="19/24", cuotas restantes = 24-19 = 5
+  → amount = cuota_mensual = VALOR CUOTA MENSUAL (última columna)
+  → monto_total = monto original de la compra (primera columna de montos)
+  → type = "cuota"
+  → LATAM 01/03 $201.073: cuota_info="1/3", cuota_mensual=201073, restantes=2 ← LEER BIEN
+  → MACONLINE 01/24 $91.666: cuota_info="1/24", cuota_mensual=91666, restantes=23
+
+- Sección 4, compras nuevas en cuotas: formato 00/TT (cuota cero = aún no cobrada)
+  → type = "cuota_nueva" (empieza a cobrar el próximo mes)
+  → cuota_info = "0/24" por ejemplo
+  → amount = cuota_mensual = VALOR CUOTA MENSUAL (última columna)
+  → monto_total = monto original
+
+REGLAS PARA card_digits:
+- Asigna según el subtotal de tarjeta donde aparece la transacción
+- "TOTAL TARJETA XXXX XXXX XXXX 6758" → card_digits="6758"
+- "TOTAL TARJETA XXXX XXXX XXXX 0836" → card_digits="0836"
+- Si no se puede determinar: null
+
+OTRAS REGLAS:
 - type="consumo" si es compra en 1 cuota (01/01)
 - type="pago" si es pago o abono (monto negativo)
-- type="cargo" si es comisión, impuesto, mantenimiento
-- description debe ser el nombre legible (ej: "HBO Max" no "HELP.HBOMAX.COM H")
-- Incluye TODAS las transacciones incluyendo pagos y cargos
-- NO incluyas transacciones del período anterior, solo el período actual
-- Para tarjeta internacional (USD): convierte el monto a pesos chilenos usando el monto en pesos que aparece en el PDF`;
+- type="cargo" si es comisión, impuesto, mantenimiento, seguros
+- description legible: "Ikea" no "DP *IKEA COM", "Starlink" no "DL*STARLINK", "YouTube" no "GOOGLE PLAY YOUTUBE"
+- Incluye TODAS las transacciones de TODAS las secciones
+- NO incluyas transacciones del período anterior
+- Para tarjeta internacional USD: usa el monto en pesos que aparece en el estado nacional
+- vencimientos: extrae la tabla "Vencimiento Próximos 4 Meses" exactamente como aparece`;
 
   let contentBlocks;
   if (payload.type === 'pdf') {
@@ -1229,7 +1260,12 @@ async function handleFiles(files) {
       log.textContent = `Categorizando ${parsed.transactions.length} movimientos...`;
 
       const monthKey = normalizePeriod(parsed.period);
-      if (!allData.months[monthKey]) allData.months[monthKey] = { transactions: [] };
+      if (!allData.months[monthKey]) allData.months[monthKey] = { transactions: [], vencimientos: null };
+
+      // Store bank vencimientos if available
+      if (parsed.vencimientos) {
+        allData.months[monthKey].vencimientos = parsed.vencimientos;
+      }
 
       const existingIds = new Set(allData.months[monthKey].transactions.map(t => t.id));
 
@@ -1246,6 +1282,7 @@ async function handleFiles(files) {
             monto_total: txn.monto_total || txn.amount,
             type: txn.type,
             cuota_info: txn.cuota_info || null,
+            card_digits: txn.card_digits || null,
             source: parsed.source,
             category: guessCategory(txn.raw || txn.description),
             manualCat: false,
@@ -1371,13 +1408,26 @@ function parsePeriodToDate(label) {
 }
 
 function computeFutureCommitments() {
-  const byMonth = {};
   const now = new Date();
-  const nowYM = now.getFullYear() * 12 + now.getMonth(); // numeric for comparison
+  const nowYM = now.getFullYear() * 12 + now.getMonth();
 
-  for (const month of Object.values(allData.months)) {
-    for (const t of month.transactions) {
-      if (t.type !== 'cuota' || !t.cuota_info) continue;
+  // Step 1: collect bank vencimientos (exact data from PDF)
+  const bankData = {}; // label → amount
+  for (const monthData of Object.values(allData.months)) {
+    if (!monthData.vencimientos) continue;
+    const v = monthData.vencimientos;
+    if (v.mes1?.label && v.mes1?.amount) bankData[v.mes1.label] = v.mes1.amount;
+    if (v.mes2?.label && v.mes2?.amount) bankData[v.mes2.label] = v.mes2.amount;
+    if (v.mes3?.label && v.mes3?.amount) bankData[v.mes3.label] = v.mes3.amount;
+    if (v.mes4?.label && v.mes4?.amount) bankData[v.mes4.label] = v.mes4.amount;
+  }
+
+  // Step 2: calculate from cuotas for months beyond bank data
+  const calcData = {}; // label → [{...txn, futuraCuota, _monthlyAmt}]
+
+  for (const monthData of Object.values(allData.months)) {
+    for (const t of monthData.transactions) {
+      if (!['cuota', 'cuota_nueva'].includes(t.type) || !t.cuota_info) continue;
       const match = t.cuota_info.match(/(\d+)\/(\d+)/);
       if (!match) continue;
       const cur = parseInt(match[1]);
@@ -1385,27 +1435,43 @@ function computeFutureCommitments() {
       const remaining = tot - cur;
       if (remaining <= 0) continue;
 
-      // Parse the transaction date to find what month this cuota corresponds to
       const parts = t.date.split('/');
       if (parts.length < 3) continue;
-      let mo = parseInt(parts[1]); // month of THIS cuota (current period)
+      let mo = parseInt(parts[1]);
       let yr = parseInt(parts[2]) + 2000;
 
-      // Project the NEXT remaining cuotas forward from the transaction date
+      // For cuota_nueva (00/XX), start from transaction month itself
+      // For regular cuotas, start from next month after transaction date
       for (let i = 1; i <= remaining; i++) {
         mo++;
         if (mo > 12) { mo = 1; yr++; }
-
-        // Only include future months (from next month onwards)
         const projYM = yr * 12 + (mo - 1);
         if (projYM <= nowYM) continue;
 
         const label = MESES[mo-1].charAt(0).toUpperCase() + MESES[mo-1].slice(1) + ' ' + yr;
-        if (!byMonth[label]) byMonth[label] = [];
-        byMonth[label].push({ ...t, futuraCuota: `${cur+i}/${tot}` });
+        if (!calcData[label]) calcData[label] = [];
+        const monthlyAmt = t.cuota_mensual || t.amount;
+        calcData[label].push({ ...t, futuraCuota: `${cur+i}/${tot}`, _monthlyAmt: monthlyAmt });
       }
     }
   }
+
+  // Step 3: merge — use bank data for near months, calculated for the rest
+  const byMonth = {};
+  const bankLabels = new Set(Object.keys(bankData));
+
+  // Add bank data months
+  for (const [label, amount] of Object.entries(bankData)) {
+    byMonth[label] = { fromBank: true, amount, items: calcData[label] || [] };
+  }
+
+  // Add calculated months beyond bank data
+  for (const [label, items] of Object.entries(calcData)) {
+    if (!bankLabels.has(label)) {
+      byMonth[label] = { fromBank: false, amount: items.reduce((s,t) => s + t._monthlyAmt, 0), items };
+    }
+  }
+
   return byMonth;
 }
 
@@ -1419,19 +1485,18 @@ function renderFuturos() {
   if (keys.length === 0) { section.style.display = 'none'; return; }
   section.style.display = 'block';
 
-  const maxAmt = Math.max(...keys.map(k => byMonth[k].reduce((s,t) => s + (t.cuota_mensual||t.amount), 0)));
+  const maxAmt = Math.max(...keys.map(k => byMonth[k].amount));
   grid.innerHTML = '';
   keys.forEach(key => {
-    const txns = byMonth[key];
-    const total = txns.reduce((s,t) => s + (t.cuota_mensual||t.amount), 0);
-    const pct = maxAmt > 0 ? total/maxAmt*100 : 0;
+    const { amount, fromBank, items } = byMonth[key];
+    const pct = maxAmt > 0 ? amount/maxAmt*100 : 0;
     const card = document.createElement('div');
     card.className = 'futuro-card' + (futurosSelected === key ? ' active' : '');
     card.innerHTML = `
-      <div class="f-mes">${key}</div>
-      <div class="f-amt">${fmtPeso(total)}</div>
+      <div class="f-mes">${key} ${fromBank ? '<span style="font-size:9px;color:var(--accent)">✓ banco</span>' : ''}</div>
+      <div class="f-amt">${fmtPeso(amount)}</div>
       <div class="f-bar"><div class="f-bar-fill" style="width:${Math.round(pct)}%"></div></div>
-      <div class="f-count">${txns.length} cuota${txns.length!==1?'s':''}</div>
+      <div class="f-count">${fromBank ? 'dato exacto del banco' : `${items.length} cuota${items.length!==1?'s':''} estimadas`}</div>
     `;
     card.onclick = () => {
       futurosSelected = futurosSelected === key ? null : key;
@@ -1443,13 +1508,22 @@ function renderFuturos() {
   });
 }
 
-function showFuturosDetalle(mes, txns) {
+function showFuturosDetalle(mes, data) {
   const panel = document.getElementById('futurosDetalle');
   const body = document.getElementById('futurosDetalleBody');
   document.getElementById('futurosDetalleTitle').textContent = `Cuotas comprometidas — ${mes}`;
   panel.style.display = 'block';
   body.innerHTML = '';
-  [...txns].sort((a,b) => (b.cuota_mensual||b.amount)-(a.cuota_mensual||a.amount)).forEach(t => {
+
+  if (data.fromBank && data.items.length === 0) {
+    body.innerHTML = `<tr><td colspan="4" style="padding:1rem;color:var(--text2);font-size:13px">
+      Dato exacto del banco: ${fmtPeso(data.amount)}. Carga el PDF de ${mes} para ver el detalle.
+    </td></tr>`;
+    return;
+  }
+
+  const items = data.fromBank ? data.items : data.items;
+  [...items].sort((a,b) => b._monthlyAmt - a._monthlyAmt).forEach(t => {
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>
@@ -1457,11 +1531,20 @@ function showFuturosDetalle(mes, txns) {
         <div class="txn-raw">${fmtPeso(t.monto_total||t.amount)} total</div>
       </td>
       <td><span class="source-badge">${t.futuraCuota}</span></td>
-      <td><span class="source-badge">${t.source?.replace(' BChile','')||'—'}</span></td>
-      <td class="txn-amount negative">${fmtPeso(t.cuota_mensual||t.amount)}</td>
+      <td><span class="source-badge">${t.source?.replace(' BChile','')||'—'}${t.card_digits ? ' '+t.card_digits : ''}</span></td>
+      <td class="txn-amount negative">${fmtPeso(t._monthlyAmt)}</td>
     `;
     body.appendChild(tr);
   });
+
+  if (data.fromBank && items.length > 0) {
+    const calcTotal = items.reduce((s,t) => s + t._monthlyAmt, 0);
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td colspan="4" style="font-size:11px;color:var(--text3);padding:8px 16px">
+      Estimado calculado: ${fmtPeso(calcTotal)} · Dato banco: ${fmtPeso(data.amount)}
+    </td>`;
+    body.appendChild(tr);
+  }
 }
 
 function closeFuturosDetalle() {
