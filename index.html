@@ -1372,6 +1372,9 @@ function parsePeriodToDate(label) {
 
 function computeFutureCommitments() {
   const byMonth = {};
+  const now = new Date();
+  const nowYM = now.getFullYear() * 12 + now.getMonth(); // numeric for comparison
+
   for (const month of Object.values(allData.months)) {
     for (const t of month.transactions) {
       if (t.type !== 'cuota' || !t.cuota_info) continue;
@@ -1382,14 +1385,21 @@ function computeFutureCommitments() {
       const remaining = tot - cur;
       if (remaining <= 0) continue;
 
+      // Parse the transaction date to find what month this cuota corresponds to
       const parts = t.date.split('/');
       if (parts.length < 3) continue;
-      let mo = parseInt(parts[1]);
+      let mo = parseInt(parts[1]); // month of THIS cuota (current period)
       let yr = parseInt(parts[2]) + 2000;
 
+      // Project the NEXT remaining cuotas forward from the transaction date
       for (let i = 1; i <= remaining; i++) {
         mo++;
         if (mo > 12) { mo = 1; yr++; }
+
+        // Only include future months (from next month onwards)
+        const projYM = yr * 12 + (mo - 1);
+        if (projYM <= nowYM) continue;
+
         const label = MESES[mo-1].charAt(0).toUpperCase() + MESES[mo-1].slice(1) + ' ' + yr;
         if (!byMonth[label]) byMonth[label] = [];
         byMonth[label].push({ ...t, futuraCuota: `${cur+i}/${tot}` });
